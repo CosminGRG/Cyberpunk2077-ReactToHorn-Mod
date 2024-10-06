@@ -6,6 +6,7 @@ local ReactToHorn = {
     },
     defaultSettings = {
         isEnabled = true,
+        isFunEnabled = false,
         pedestrianReactRadius = 10.0,
         vehicleReactRadius = 30.0,
         pedestrianDodgeOnPavement = true,
@@ -17,6 +18,7 @@ local ReactToHorn = {
         vehiclesReactTypeSelectorValue = 1,
         pedestrianReactProbability = 70,
         vehiclesReactProbability = 70,
+        funRadius = 20.0,
         popTiresOnHonk = false,
         bounceOnHonk = false,
         killNPCsOnHonk = false,
@@ -39,6 +41,8 @@ local ReactToHorn = {
     maxPedestrianReactRadius = 30.0,
     minVehicleReactRadius = 1.0,
     maxVehicleReactRadius = 50.0,
+    minFunRadius = 1.0,
+    maxFunRadius = 50.0,
     radiusStep = 1.0,
     minProbability = 0,
     maxProbability = 100,
@@ -52,13 +56,20 @@ local ReactToHorn = {
         { maxSpeed = math.huge, normal = 30.0, high = 30.0, veryHigh = 30.0 }
     }
 }
-local explosion = nil
 
 function ReactToHorn:new()
     registerForEvent("onInit", function()
         self:InitializeSettings()
         self:ObserveHornEvent()
         self:ObserveReactionEvent()
+
+        --[[ local attackRecords = TweakDB:GetRecords("gamedataAttack_GameEffect_Record")
+        for key, value in pairs(attackRecords) do
+            if value:GetID() then
+                local id = tostring(value:GetID().value)
+                print(id)
+            end
+        end ]]
 
         math.randomseed(os.time() + os.clock())
         Cron.Every(60, function() self:ReseedRandomGenerator() end, self)
@@ -89,6 +100,10 @@ end
 function ReactToHorn:ObserveHornEvent()
     Observe("VehicleComponent", "ToggleVehicleHorn", function(this, state, isPolice)
         if not state or not self.settings.isEnabled then return end
+
+        local honkingVehicle = this:GetVehicle()
+        local isPlayerDriver = honkingVehicle:IsPlayerDriver()
+        if not isPlayerDriver then return end
 
         local player = Game.GetPlayer()
         local vehicle = Game.GetMountedVehicle(player)
@@ -122,7 +137,7 @@ function ReactToHorn:ObserveReactionEvent()
             end
 
             ---@diagnostic disable-next-line: missing-parameter
-            Cron.After(1, function()
+            Cron.After(0.5, function()
                 self.isAlreadyTriggeringReaction = false
             end)
         end
@@ -174,12 +189,12 @@ function ReactToHorn:BroadcastPedestrianReaction(player)
     end
 end
 
-function ReactToHorn:BoradcastTerror(player)
+function ReactToHorn:BroadcastTerror(player, radius)
     local investigateData = senseStimInvestigateData.new()
     investigateData.skipReactionDelay = true
     investigateData.skipInitialAnimation = true
     investigateData.illegalAction = false
-    local stimRadius = self.settings.pedestrianReactRadius
+    local stimRadius = radius
 
     StimBroadcasterComponent.BroadcastStim(player, gamedataStimType.Terror, stimRadius,
         investigateData,
@@ -187,65 +202,82 @@ function ReactToHorn:BoradcastTerror(player)
 end
 
 function ReactToHorn:HandleHonkingReaction(player)
-    local entities = self:GetEntitiesAroundPlayer(player)
-    for _, entity in ipairs(entities) do
+    --Extremely lazy way, needs refactoring badly
+    if self.settings.isFunEnabled then
+        local funEntities = self:GetEntitiesAroundPlayer(player, self.settings.funRadius)
+        --print("#funEntities", #funEntities)
+        for _, entity in ipairs(funEntities) do
+            local entityToProcess = entity:GetComponent():GetEntity()
+            self:ProcessEntityByType(entityToProcess, player, "fun")
+        end
+    end
+    local immersionEntities = self:GetEntitiesAroundPlayer(player, self.settings.vehicleReactRadius)
+    --print("#immersionEntities", #immersionEntities)
+    for _, entity in ipairs(immersionEntities) do
         local entityToProcess = entity:GetComponent():GetEntity()
-        self:ProcessEntityByType(entityToProcess, player)
+        self:ProcessEntityByType(entityToProcess, player, "immersion")
     end
 end
 
-function ReactToHorn:GetEntitiesAroundPlayer(player)
+function ReactToHorn:GetEntitiesAroundPlayer(player, radius)
     local targetingSystem = Game.GetTargetingSystem()
     local parts = {}
     local searchQuery = Game["TSQ_ALL;"]()
-    searchQuery.maxDistance = math.floor(self.settings.vehicleReactRadius)
+    searchQuery.maxDistance = math.floor(radius)
     searchQuery.testedSet = TargetingSet.Visible
     local success, parts = targetingSystem:GetTargetParts(player, searchQuery)
     return parts
 end
 
-function ReactToHorn:ProcessEntityByType(entity, player)
+function ReactToHorn:ProcessEntityByType(entity, player, context)
     if self:IsEntityVehicle(entity) and entity:IsVehicle() then
-        self:HandleVehicleEntity(entity, player)
+        self:HandleVehicleEntity(entity, player, context)
     end
     if self:IsEntityNPC(entity) then
-        self:HandleNPCEntity(entity, player)
+        self:HandleNPCEntity(entity, player, context)
     end
 end
 
-function ReactToHorn:HandleVehicleEntity(entity, player)
+function ReactToHorn:HandleVehicleEntity(entity, player, context)
     if entity:IsPlayerVehicle() or entity:IsPlayerDriver() then return end
 
-    if self.settings.vehiclesReactToHonk then
-        self:VehicleReaction(entity, player)
-    end
-    if self.settings.popTiresOnHonk then
-        if not self.settings.explodeVehicleOnHonk then
-            self:PopRandomTire(entity, player)
+    if context == "immersion" then
+        if self.settings.vehiclesReactToHonk then
+            self:VehicleReaction(entity, player)
         end
-    end
-    if self.settings.bounceOnHonk then
-        if not self.settings.explodeVehicleOnHonk then
-            self:Bounce(entity)
+    elseif context == "fun" then
+        if self.settings.popTiresOnHonk then
+            if not self.settings.explodeVehicleOnHonk or not self.settings.bounceOnHonk then
+                self:PopRandomTire(entity, player)
+            end
         end
-    end
-    if self.settings.explodeVehicleOnHonk then
-        self:ExplodeVehiclesInVicinity(entity, player)
+        if self.settings.bounceOnHonk then
+            if not self.settings.explodeVehicleOnHonk then
+                self:Bounce(entity)
+            end
+        end
+        if self.settings.explodeVehicleOnHonk then
+            self:ExplodeVehiclesInVicinity(entity, player)
+        end
     end
 end
 
-function ReactToHorn:HandleNPCEntity(entity, player)
+function ReactToHorn:HandleNPCEntity(entity, player, context)
     if entity:IsDead() or entity:IsCharacterChildren() or entity:IsQuest() then return end
 
-    if self.settings.killNPCsOnHonk then
-        if not self.settings.explodeNPCOnHonk then
-            self:BoradcastTerror(player)
-            self:KillNPCsInVicinity(entity, player)
+    if context == "immersion" then
+
+    elseif context == "fun" then
+        if self.settings.killNPCsOnHonk then
+            if not self.settings.explodeNPCOnHonk then
+                self:BroadcastTerror(player, self.settings.funRadius)
+                self:KillNPCsInVicinity(entity, player)
+            end
         end
-    end
-    if self.settings.explodeNPCOnHonk then
-        self:BoradcastTerror(player)
-        self:ExplodeNPCsInVicinity(entity, player)
+        if self.settings.explodeNPCOnHonk then
+            self:BroadcastTerror(player, self.settings.funRadius)
+            self:ExplodeNPCsInVicinity(entity, player)
+        end
     end
 end
 
@@ -264,7 +296,7 @@ function ReactToHorn:ExplodeNPCsInVicinity(npc, player)
     ---@diagnostic disable-next-line: missing-parameter
     Cron.After(randomDelay, function()
         local duration = 1.0
-        local explosion = "Attacks.RocketEffect"
+        local explosion = "Attacks.OzobGrenade" --Attacks.RocketEffect
         self:SpawnExplosion(npc, player, explosion, duration)
         npc:Kill(nil, true, false)
     end)
@@ -493,6 +525,22 @@ function ReactToHorn:SetupMenu(nativeSettings)
             self.settings.vehiclesReactProbability,
             self.defaultSettings.vehiclesReactProbability, function(value)
                 self.settings.vehiclesReactProbability = value
+                SaveSettings()
+            end)
+
+        nativeSettings.addSwitch("/react_to_horn/fun", "Fun Enabled",
+            "Enable or Disable the fun features", self.settings.isFunEnabled, self.defaultSettings.isFunEnabled,
+            function(state)
+                self.settings.isFunEnabled = state
+                SaveSettings()
+            end)
+
+        nativeSettings.addRangeFloat("/react_to_horn/fun", "Fun Radius",
+            "Adjust the radius within which vehicles and NPCs are having fun", self.minFunRadius,
+            self.maxFunRadius,
+            self.radiusStep, "%.2f", self.settings.funRadius, self.defaultSettings.funRadius,
+            function(value)
+                self.settings.funRadius = value
                 SaveSettings()
             end)
 
