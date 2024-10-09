@@ -63,18 +63,10 @@ function ReactToHorn:new()
         self:ObserveHornEvent()
         self:ObserveReactionEvent()
 
-        --[[ local attackRecords = TweakDB:GetRecords("gamedataAttack_GameEffect_Record")
-        for key, value in pairs(attackRecords) do
-            if value:GetID() then
-                local id = tostring(value:GetID().value)
-                print(id)
-            end
-        end ]]
-
         math.randomseed(os.time() + os.clock())
         Cron.Every(60, function() self:ReseedRandomGenerator() end, self)
 
-        print("[ReactToHorn] React To Horn - v1.1.0 initialized")
+        print("[ReactToHorn] React To Horn - v1.1.1 initialized")
     end)
 
     registerForEvent("onUpdate", function(deltaTime)
@@ -215,6 +207,7 @@ function ReactToHorn:HandleHonkingReaction(player)
     --print("#immersionEntities", #immersionEntities)
     for _, entity in ipairs(immersionEntities) do
         local entityToProcess = entity:GetComponent():GetEntity()
+
         self:ProcessEntityByType(entityToProcess, player, "immersion")
     end
 end
@@ -223,7 +216,8 @@ function ReactToHorn:GetEntitiesAroundPlayer(player, radius)
     local targetingSystem = Game.GetTargetingSystem()
     local parts = {}
     local searchQuery = Game["TSQ_ALL;"]()
-    searchQuery.maxDistance = math.floor(radius)
+    searchQuery.ignoreInstigator = true
+    searchQuery.maxDistance = math.floor(radius + 10) --fuck
     searchQuery.testedSet = TargetingSet.Visible
     local success, parts = targetingSystem:GetTargetParts(player, searchQuery)
     return parts
@@ -232,8 +226,7 @@ end
 function ReactToHorn:ProcessEntityByType(entity, player, context)
     if self:IsEntityVehicle(entity) and entity:IsVehicle() then
         self:HandleVehicleEntity(entity, player, context)
-    end
-    if self:IsEntityNPC(entity) then
+    elseif self:IsEntityNPC(entity) then
         self:HandleNPCEntity(entity, player, context)
     end
 end
@@ -253,7 +246,7 @@ function ReactToHorn:HandleVehicleEntity(entity, player, context)
         end
         if self.settings.bounceOnHonk then
             if not self.settings.explodeVehicleOnHonk then
-                self:Bounce(entity)
+                self:Bounce(entity, player)
             end
         end
         if self.settings.explodeVehicleOnHonk then
@@ -263,11 +256,9 @@ function ReactToHorn:HandleVehicleEntity(entity, player, context)
 end
 
 function ReactToHorn:HandleNPCEntity(entity, player, context)
-    if entity:IsDead() or entity:IsCharacterChildren() or entity:IsQuest() then return end
+    if entity:IsDead() or entity:IsCharacterChildren() or entity:IsQuest() or entity:IsPlayerCompanion() or entity:IsVendor() then return end
 
-    if context == "immersion" then
-
-    elseif context == "fun" then
+    if context == "fun" then
         if self.settings.killNPCsOnHonk then
             if not self.settings.explodeNPCOnHonk then
                 self:BroadcastTerror(player, self.settings.funRadius)
@@ -286,7 +277,7 @@ function ReactToHorn:KillNPCsInVicinity(npc, player)
 
     ---@diagnostic disable-next-line: missing-parameter
     Cron.After(randomDelay, function()
-        npc:Kill(player, false, false)
+        npc:Kill(nil, false, false)
     end)
 end
 
@@ -298,7 +289,7 @@ function ReactToHorn:ExplodeNPCsInVicinity(npc, player)
         local duration = 1.0
         local explosion = "Attacks.OzobGrenade" --Attacks.RocketEffect
         self:SpawnExplosion(npc, player, explosion, duration)
-        npc:Kill(nil, true, false)
+        npc:Kill(nil, false, false)
     end)
 end
 
@@ -337,11 +328,20 @@ function ReactToHorn:PopRandomTire(vehicle, player)
     end)
 end
 
-function ReactToHorn:Bounce(vehicle)
+function ReactToHorn:Bounce(vehicle, player)
+    local vehicleComp = vehicle:GetVehicleComponent()
+    local vehicleCompPS = vehicleComp:GetPS()
+    local hasExploded = vehicleCompPS:GetHasExploded()
+    if hasExploded then return end
     vehicle:SetHasExploded()
 end
 
 function ReactToHorn:ExplodeVehiclesInVicinity(vehicle, player)
+    local vehicleComp = vehicle:GetVehicleComponent()
+    local vehicleCompPS = vehicleComp:GetPS()
+    local hasExploded = vehicleCompPS:GetHasExploded()
+    if hasExploded then return end
+
     local randomDelay = 0.2 + math.random() * (2.5 - 0.2)
 
     ---@diagnostic disable-next-line: missing-parameter
@@ -351,11 +351,13 @@ function ReactToHorn:ExplodeVehiclesInVicinity(vehicle, player)
         self:SpawnExplosion(vehicle, player, explosion, duration)
         self:SpawnExplosion(vehicle, player, explosion, duration)
         self:SpawnExplosion(vehicle, player, explosion, duration)
+        --vehicleComp:ExplodeVehicle(nil) just becasue this damages player car a ton
     end)
 end
 
 function ReactToHorn:ExtractClassNameFromEntity(entity)
     local className = tostring(entity:GetClassName())
+
     return string.match(className, "%-%-%[%[%s*(.-)%s*%-%-%]%]")
 end
 
@@ -590,33 +592,5 @@ function ReactToHorn:SetupMenu(nativeSettings)
             end)
     end
 end
-
--- Keybinds
-registerInput("getEntities", "Test Get Entities", function(keypress)
-    if not keypress then
-        return
-    end
-
-    local player = Game.GetPlayer()
-    ReactToHorn:HandleHonkingReaction(player)
-end)
-
-registerInput("SpawnExplosion", "Spawn Explosion At Player Target Position", function(keypress)
-    if not keypress then
-        return
-    end
-
-
-    local player = Game.GetPlayer()
-    local vehicle = Game.GetMountedVehicle(player)
-
-    ReactToHorn:HandleHonkingReaction(player)
-
-    --[[ local pos = Game.GetTargetingSystem():GetLookAtPosition(Game.GetPlayer(), true, false)
-    local att = GetSingleton("gameAttack_GameEffect")
-    if att and pos and explosion then
-        att:SpawnExplosionAttack(TweakDB:GetRecord(explosion), nil, Game.GetPlayer(), Game.GetPlayer(), pos, 3.0) --TDB attack record, weapon object, instigator object, source object (you may want to change this. This might be the explosion source and may kill you), vector4 pos, duration
-    end ]]
-end)
 
 return ReactToHorn:new()
