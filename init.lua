@@ -1,5 +1,6 @@
 local config = require("modules/config/config")
 local Cron = require("modules/externals/Cron")
+local ui = require("modules/ui/ui")
 
 local ReactToHorn = {
     settings = {
@@ -8,10 +9,11 @@ local ReactToHorn = {
         isEnabled = true,
         isFunEnabled = false,
         pedestrianReactRadius = 10.0,
-        vehicleReactRadius = 30.0,
+        vehicleReactRadius = 20.0,
         pedestrianDodgeOnPavement = true,
         pedestrianReactToHonk = true,
         vehiclesReactToHonk = true,
+        policeVehiclesReactToHonk = false,
         pedestrianReactIntensity = 1,
         pedestrianReactTypeValue = 50,
         pedestrianReactTypeSelectorValue = 1,
@@ -23,24 +25,48 @@ local ReactToHorn = {
         bounceOnHonk = false,
         killNPCsOnHonk = false,
         explodeNPCOnHonk = false,
-        explodeVehicleOnHonk = false
+        explodeVehicleOnHonk = false,
+        pedestrianReactMode = 1,
+        vehicleReactMode = 1,
+        currentPedestrianPreset = "simple",
+        currentvehiclePreset = "simple",
+        vehicleTimoutSelectorValue = 2,
+        pedestrianTimeoutSelectorValue = 1,
+        complex = {
+            pedestrian = {
+                pedestrianReactTimeoutMin = 3,
+                pedestrianReactTimeoutMix = 10,
+                walkAwayProbability = 20,
+                runProbability = 20,
+                verbalProbability = 20,
+            },
+            vehicle = {
+                vehicleReactTimeoutMin = 3,
+                vehicleReactTimeoutMax = 10,
+                panicProbability = 20,
+                honkBackProbability = 30,
+                verbalProbability = 40,
+            }
+        }
     },
 
+    pedestrianReactModeNames = { "Simple", "Complex" },
     pedestrianReactIntensityNames = { "Normal", "High", "Very High" },
-    pedestrianReactTypesNames = { "Random", "Walk Away", "Run" },
+    pedestrianReactTypesNames = { "Random", "Walk Away", "Run", "Verbal" },
     pedestrianReactTypes = {
         ["Random"] = 1,
         ["Walk Away"] = 50,
         ["Run"] = 54,
     },
-    vehicleReactTypesNames = { "Random", "Panic", "Honk Back" },
+    vehicleReactTypesNames = { "Random", "Panic", "Honk Back", "Verbal" },
+    vehicleReactTimeoutNames = { "No Timeout", "3-10 seconds", "5-13 seconds", "7-16 seconds", "9-19 seconds" },
 
     delay = false,
     delayTime = 1,
     minPedestrianReactRadius = 1.0,
     maxPedestrianReactRadius = 30.0,
     minVehicleReactRadius = 1.0,
-    maxVehicleReactRadius = 50.0,
+    maxVehicleReactRadius = 40.0,
     minFunRadius = 1.0,
     maxFunRadius = 50.0,
     radiusStep = 1.0,
@@ -48,12 +74,38 @@ local ReactToHorn = {
     maxProbability = 100,
     probabilityStep = 1,
 
+    complexDefines = {
+        pedestrian = {
+            maxWalkAwayProb = 100,
+            maxRunProb = 100,
+            maxVerbalProb = 100
+        },
+        vehicle = {
+            minVehicleTimeoutMin = 0,
+            maxVehicleTimeoutMin = 100,
+            minVehicleTimeoutMax = 0,
+            maxVehicleTimeoutMax = 100,
+            maxPanicProb = 100,
+            maxHonkBackProb = 100,
+            maxVerbalProb = 100
+        }
+    },
+
+    reactedVehicles = {},
+    reactedPedestrians = {},
     isAlreadyTriggeringReaction = false,
 
     distanceChecks = {
         { maxSpeed = 20.0,      normal = 10.0, high = 15.0, veryHigh = 30.0 },
         { maxSpeed = 35.0,      normal = 20.0, high = 23.0, veryHigh = 30.0 },
         { maxSpeed = math.huge, normal = 30.0, high = 30.0, veryHigh = 30.0 }
+    },
+    timeoutRanges = {
+        ["No Timeout"] = { 0, 0 },
+        ["3-10 seconds"] = { 3, 10 },
+        ["5-13 seconds"] = { 5, 13 },
+        ["7-16 seconds"] = { 7, 16 },
+        ["9-19 seconds"] = { 9, 19 },
     }
 }
 
@@ -62,6 +114,21 @@ function ReactToHorn:new()
         self:InitializeSettings()
         self:ObserveHornEvent()
         self:ObserveReactionEvent()
+
+        local nativeSettings = GetMod("nativeSettings")
+        if not nativeSettings then
+            print("[React To Horn] Error: Missing Native Settings UI. Search and intall this mod from Nexus")
+            return
+        end
+
+        if ui and ui.onInit then
+            ui.onInit(ReactToHorn)
+        else
+            print("[ReactToHorn] Error: Missing UI or its onInit method. Make sure the mod is installed correctly")
+            return
+        end
+
+        ui:SetupMenu(nativeSettings)
 
         math.randomseed(os.time() + os.clock())
         Cron.Every(60, function() self:ReseedRandomGenerator() end, self)
@@ -79,14 +146,6 @@ end
 function ReactToHorn:InitializeSettings()
     config.tryCreateConfig("config.json", self.defaultSettings)
     self.settings = config.loadFile("config.json")
-
-    local nativeSettings = GetMod("nativeSettings")
-    if not nativeSettings then
-        print("[React To Horn] Error: Missing Native Settings")
-        return
-    end
-
-    self:SetupMenu(nativeSettings)
 end
 
 function ReactToHorn:ObserveHornEvent()
@@ -197,14 +256,15 @@ function ReactToHorn:HandleHonkingReaction(player)
     --Extremely lazy way, needs refactoring badly
     if self.settings.isFunEnabled then
         local funEntities = self:GetEntitiesAroundPlayer(player, self.settings.funRadius)
-        --print("#funEntities", #funEntities)
+
         for _, entity in ipairs(funEntities) do
             local entityToProcess = entity:GetComponent():GetEntity()
             self:ProcessEntityByType(entityToProcess, player, "fun")
         end
     end
+
     local immersionEntities = self:GetEntitiesAroundPlayer(player, self.settings.vehicleReactRadius)
-    --print("#immersionEntities", #immersionEntities)
+
     for _, entity in ipairs(immersionEntities) do
         local entityToProcess = entity:GetComponent():GetEntity()
 
@@ -214,7 +274,6 @@ end
 
 function ReactToHorn:GetEntitiesAroundPlayer(player, radius)
     local targetingSystem = Game.GetTargetingSystem()
-    local parts = {}
     local searchQuery = Game["TSQ_ALL;"]()
     searchQuery.ignoreInstigator = true
     searchQuery.maxDistance = math.floor(radius + 10) --fuck
@@ -227,15 +286,20 @@ function ReactToHorn:ProcessEntityByType(entity, player, context)
     if self:IsEntityVehicle(entity) and entity:IsVehicle() then
         self:HandleVehicleEntity(entity, player, context)
     elseif self:IsEntityNPC(entity) then
+        print("entity", entity)
         self:HandleNPCEntity(entity, player, context)
     end
 end
 
 function ReactToHorn:HandleVehicleEntity(entity, player, context)
-    if entity:IsPlayerVehicle() or entity:IsPlayerDriver() then return end
+    if entity:IsPlayerVehicle() or entity:IsPlayerDriver() or entity:IsQuest() then return end
+    local vehicleComp = entity:GetVehicleComponent()
 
     if context == "immersion" then
         if self.settings.vehiclesReactToHonk then
+            if not self.settings.policeVehiclesReactToHonk and (vehicleComp:HasPreventionPassenger() or entity:IsPrevention()) then return end
+            if not vehicleComp.HasActiveDriverMounted(entity:GetEntityID()) or entity:IsVehicleParked() then return end
+
             self:VehicleReaction(entity, player)
         end
     elseif context == "fun" then
@@ -256,9 +320,11 @@ function ReactToHorn:HandleVehicleEntity(entity, player, context)
 end
 
 function ReactToHorn:HandleNPCEntity(entity, player, context)
-    if entity:IsDead() or entity:IsCharacterChildren() or entity:IsQuest() or entity:IsPlayerCompanion() or entity:IsVendor() then return end
+    if entity:IsDead() or entity:IsQuest() or entity:IsPlayerCompanion() or entity:IsVendor() then return end
 
-    if context == "fun" then
+    if context == "immersion" then
+        self:PedestrianReaction(entity, player)
+    elseif context == "fun" then
         if self.settings.killNPCsOnHonk then
             if not self.settings.explodeNPCOnHonk then
                 self:BroadcastTerror(player, self.settings.funRadius)
@@ -270,6 +336,11 @@ function ReactToHorn:HandleNPCEntity(entity, player, context)
             self:ExplodeNPCsInVicinity(entity, player)
         end
     end
+end
+
+function ReactToHorn:PedestrianReaction(npc, player)
+    print("npc", npc)
+    StimBroadcasterComponent.SendDrirectStimuliToTarget(npc, gamedataStimType.Terror, npc)
 end
 
 function ReactToHorn:KillNPCsInVicinity(npc, player)
@@ -293,25 +364,154 @@ function ReactToHorn:ExplodeNPCsInVicinity(npc, player)
     end)
 end
 
+local function GetCurrentTime()
+    return os.clock()
+end
+
+local function CleanUpExpiredEntries(currentTime)
+    local currentTime = GetCurrentTime()
+
+    for vehicleID, vehData in pairs(ReactToHorn.reactedVehicles) do
+        if currentTime >= (vehData.time + vehData.timeout) then
+            print("Removing vehicle from reactedVehicles: VehicleID: ", vehicleID)
+            ReactToHorn.reactedVehicles[vehicleID] = nil
+        end
+    end
+end
+
+local function IsVehicleInCooldown(vehicleID, currentTime)
+    CleanUpExpiredEntries(currentTime)
+
+    if ReactToHorn.reactedVehicles[vehicleID] == nil then
+        print("Vehicle is not in cooldown")
+        return false
+    end
+
+    local vehData = ReactToHorn.reactedVehicles[vehicleID]
+
+    print("currentTime < (vehData.time + vehData.timeout)", currentTime < (vehData.time + vehData.timeout))
+    return currentTime < (vehData.time + vehData.timeout)
+end
+
+local function GetRandomTimeout()
+    if ReactToHorn.settings.vehicleReactMode == 1 then
+        local timeoutSelection = ReactToHorn.settings.vehicleTimoutSelectorValue
+
+        local range = ReactToHorn.timeoutRanges[ReactToHorn.vehicleReactTimeoutNames[timeoutSelection]]
+        if range then
+            return math.random(range[1], range[2])
+        else
+            return 5
+        end
+    elseif ReactToHorn.settings.vehicleReactMode == 2 then
+        local rangeMin = ReactToHorn.settings.complex.vehicle.vehicleReactTimeoutMin
+        local rangeMax = ReactToHorn.settings.complex.vehicle.vehicleReactTimeoutMax
+        print("rangeMin", rangeMin)
+        print("rangeMax", rangeMax)
+        return math.random(rangeMin, rangeMax)
+    end
+end
+
 function ReactToHorn:VehicleReaction(vehicle, player)
+    local vehicleID = vehicle:GetEntityID():GetHash()
+    local timeoutPeriod = GetRandomTimeout()
+    local currentTime = GetCurrentTime()
+
+    print("timeoutPeriod", timeoutPeriod)
+
+    if IsVehicleInCooldown(vehicleID, currentTime) then
+        print("Vehicle is in cooldown")
+        return
+    end
+
+    self.reactedVehicles[vehicleID] = {
+        time = currentTime,
+        timeout = timeoutPeriod
+    }
+
+    local vehicleComp = vehicle:GetVehicleComponent()
+    if self.settings.vehicleReactMode == 1 then
+        self:SimpleModeReaction(vehicle, vehicleComp, player)
+    elseif self.settings.vehicleReactMode == 2 then
+        self:ComplexModeReation(vehicle, vehicleComp, player)
+    end
+end
+
+function ReactToHorn:ComplexModeReation(vehicle, vehicleComp, player)
+    local vehicleHonkBackProbability = self.settings.complex.vehicle.honkBackProbability / 100
+    print("vehicleHonkBackProbability", vehicleHonkBackProbability)
+    local vehiclePanicProbability = self.settings.complex.vehicle.panicProbability / 100
+    print("vehiclePanicProbability", vehiclePanicProbability)
+    local vehicleVerbalProbability = self.settings.complex.vehicle.verbalProbability / 100
+    print("vehicleVerbalProbability", vehicleVerbalProbability)
+
+    local randomValue = math.random()
+    if randomValue <= vehicleHonkBackProbability then
+        print("ToggleHorn")
+        local randomDelay = math.random() * (2.0 - 0.5) + 0.5
+        vehicleComp:PlayDelayedHonk(1.0, randomDelay)
+        --vehicle:ToggleHorn(true)
+    elseif randomValue <= vehicleHonkBackProbability + vehiclePanicProbability then
+        print("TriggerDrivingPanicBehavior")
+        vehicle:TriggerDrivingPanicBehavior(player:GetWorldPosition())
+    elseif randomValue <= vehicleHonkBackProbability + vehiclePanicProbability + vehicleVerbalProbability then
+        print("PlayVoiceOver")
+        local randomChoice = math.random(1, 3)
+        local verbal = ""
+        if randomChoice == 1 then
+            verbal = "stlh_curious_grunt"
+        elseif randomChoice == 2 then
+            verbal = "greeting"
+        else
+            verbal = "vehicle_bump"
+        end
+        vehicle.PlayVoiceOver(vehicleComp.GetDriverMounted(vehicle:GetEntityID()), verbal,
+            "Scripts:ReactToHorn", true);
+    else
+        print("Nothing happened")
+    end
+end
+
+function ReactToHorn:SimpleModeReaction(vehicle, vehicleComp, player)
     local vehiclesReaction = self.settings.vehiclesReactTypeSelectorValue
     local vehiclesReactionProbability = self.settings.vehiclesReactProbability / 100
 
+    --"hit_reaction_light"
+    --"pedestrian_hit"
+    --"danger"
+    --"fear_run"
+    --"fear_beg"
+    --"stlh_curious_grunt"
+    --"greeting"
+    --"vehicle_bump"
     if math.random() <= vehiclesReactionProbability then
         if vehiclesReaction == 1 then
-            if math.random() < 0.5 then
+            local randomChoice = math.random(1, 3)
+            if randomChoice == 1 then
                 vehicle:ToggleHorn(true)
-            else
-                --if vehicle:CanStartPanicDriving() then
+            elseif randomChoice == 2 then
                 vehicle:TriggerDrivingPanicBehavior(player:GetWorldPosition())
-                --end
+            else
+                vehicle.PlayVoiceOver(vehicleComp.GetDriverMounted(vehicle:GetEntityID()), "greeting",
+                    "Scripts:ReactToHorn", true);
             end
         elseif vehiclesReaction == 2 then
-            --if vehicle:CanStartPanicDriving() then
             vehicle:TriggerDrivingPanicBehavior(player:GetWorldPosition())
-            --end
         elseif vehiclesReaction == 3 then
-            vehicle:ToggleHorn(true)
+            local randomDelay = math.random() * (2.0 - 0.5) + 0.5
+            vehicleComp:PlayDelayedHonk(1.0, randomDelay)
+        elseif vehiclesReaction == 4 then
+            local randomChoice = math.random(1, 3)
+            local verbal = ""
+            if randomChoice == 1 then
+                verbal = "stlh_curious_grunt"
+            elseif randomChoice == 2 then
+                verbal = "greeting"
+            else
+                verbal = "vehicle_bump"
+            end
+            vehicle.PlayVoiceOver(vehicleComp.GetDriverMounted(vehicle:GetEntityID()), verbal,
+                "Scripts:ReactToHorn", true);
         end
     end
 end
@@ -355,22 +555,12 @@ function ReactToHorn:ExplodeVehiclesInVicinity(vehicle, player)
     end)
 end
 
-function ReactToHorn:ExtractClassNameFromEntity(entity)
-    local className = tostring(entity:GetClassName())
-
-    return string.match(className, "%-%-%[%[%s*(.-)%s*%-%-%]%]")
-end
-
 function ReactToHorn:IsEntityVehicle(entity)
-    local entityClassName = self:ExtractClassNameFromEntity(entity)
-
-    return entityClassName == "vehicleCarBaseObject"
+    return entity:ToString() == "vehicleCarBaseObject"
 end
 
 function ReactToHorn:IsEntityNPC(entity)
-    local entityClassName = self:ExtractClassNameFromEntity(entity)
-
-    return entityClassName == "NPCPuppet"
+    return entity:ToString() == "NPCPuppet"
 end
 
 function ReactToHorn:GetDistanceCheck(actualSpeed)
@@ -415,182 +605,16 @@ function ReactToHorn:ReseedRandomGenerator()
     math.randomseed(os.time() + os.clock())
 end
 
-local function SaveSettings()
-    config.saveFile("config.json", ReactToHorn.settings)
-end
-
-function ReactToHorn:SetupMenu(nativeSettings)
-    if not nativeSettings.pathExists("/react_to_horn") then
-        nativeSettings.addTab("/react_to_horn", "React To Horn")
-        nativeSettings.addSubcategory("/react_to_horn/general", "React To Horn")
-        nativeSettings.addSubcategory("/react_to_horn/pedestrian_dodge_settings",
-            "Pedestrians Dodge on Honk Settings - When on pavement")
-        nativeSettings.addSubcategory("/react_to_horn/pedestrian_react_settings",
-            "Pedestrians React to Honk Settings")
-        nativeSettings.addSubcategory("/react_to_horn/vehicle_react_settings",
-            "Vehicles React to Honk Settings")
-        nativeSettings.addSubcategory("/react_to_horn/fun",
-            "Fun")
-
-        nativeSettings.addSwitch("/react_to_horn/general", "React To Horn",
-            "Enable or Disable the React To Horn mod", self.settings.isEnabled, self.defaultSettings.isEnabled,
-            function(state)
-                self.settings.isEnabled = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/pedestrian_dodge_settings", "Pedestrians Dodge On Honk",
-            "When you're on the pavement and honk your horn, pedestrians will dodge. The distance at which pedestrians react increases with your speed and with the intensity setting below - the faster you drive, the greater the effect",
-            self.settings.pedestrianDodgeOnPavement,
-            self.defaultSettings.pedestrianDodgeOnPavement,
-            function(state)
-                self.settings.pedestrianDodgeOnPavement = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addSelectorString("/react_to_horn/pedestrian_dodge_settings", "Dodge Reaction Intensity",
-            "Adjust the intensity of pedestrian reactions to your horn. Higher settings make them dodge from farther away, even when you drive slow",
-            self.pedestrianReactIntensityNames, self.settings.pedestrianReactIntensity,
-            self.defaultSettings.pedestrianReactIntensity,
-            function(value)
-                self.settings.pedestrianReactIntensity = value
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/pedestrian_react_settings", "Pedestrians React To Horn",
-            "When you're NOT on the pavement and honk your horn, pedestrians will react. You can choose the reaction type using the setting below",
-            self.settings.pedestrianReactToHonk,
-            self.defaultSettings.pedestrianReactToHonk,
-            function(state)
-                self.settings.pedestrianReactToHonk = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addSelectorString("/react_to_horn/pedestrian_react_settings", "Reaction Type",
-            "What type of the reaction should the NPCs have when you honk the horn",
-            self.pedestrianReactTypesNames, self.settings.pedestrianReactTypeSelectorValue,
-            self.defaultSettings.pedestrianReactTypeSelectorValue,
-            function(value)
-                local selectedReaction = self.pedestrianReactTypesNames[value]
-                self.settings.pedestrianReactTypeValue = self.pedestrianReactTypes[selectedReaction]
-                self.settings.pedestrianReactTypeSelectorValue = value
-                SaveSettings()
-            end)
-
-        nativeSettings.addRangeFloat("/react_to_horn/pedestrian_react_settings", "Reaction Radius",
-            "Adjust the radius within which NPCs react to your vehicle's horn", self.minPedestrianReactRadius,
-            self.maxPedestrianReactRadius,
-            self.radiusStep, "%.2f", self.settings.pedestrianReactRadius, self.defaultSettings.pedestrianReactRadius,
-            function(value)
-                self.settings.pedestrianReactRadius = value
-                SaveSettings()
-            end)
-
-        nativeSettings.addRangeInt("/react_to_horn/pedestrian_react_settings", "Reaction Probability (%)",
-            "The probability for the NPC reaction to happen",
-            self.minProbability, self.maxProbability, self.probabilityStep,
-            self.settings.pedestrianReactProbability,
-            self.defaultSettings.pedestrianReactProbability, function(value)
-                self.settings.pedestrianReactProbability = value
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/vehicle_react_settings", "Vehicles React To Horn",
-            "Enable or Disable vehicles reacting to honk", self.settings.vehiclesReactToHonk,
-            self.defaultSettings.vehiclesReactToHonk,
-            function(state)
-                self.settings.vehiclesReactToHonk = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addSelectorString("/react_to_horn/vehicle_react_settings", "Reaction Type",
-            "What type of the reaction should the Vehicle NPCs have when you honk the horn",
-            self.vehicleReactTypesNames, self.settings.vehiclesReactTypeSelectorValue,
-            self.defaultSettings.vehiclesReactTypeSelectorValue,
-            function(value)
-                self.settings.vehiclesReactTypeSelectorValue = value
-                SaveSettings()
-            end)
-
-        nativeSettings.addRangeFloat("/react_to_horn/vehicle_react_settings", "Reaction Radius",
-            "Adjust the radius within which vehicle NPCs react to your vehicle's horn", self.minVehicleReactRadius,
-            self.maxVehicleReactRadius,
-            self.radiusStep, "%.2f", self.settings.vehicleReactRadius, self.defaultSettings.vehicleReactRadius,
-            function(value)
-                self.settings.vehicleReactRadius = value
-                SaveSettings()
-            end)
-
-        nativeSettings.addRangeInt("/react_to_horn/vehicle_react_settings", "Reaction Probability (%)",
-            "The probability for the vehicle reaction to happen",
-            self.minProbability, self.maxProbability, self.probabilityStep,
-            self.settings.vehiclesReactProbability,
-            self.defaultSettings.vehiclesReactProbability, function(value)
-                self.settings.vehiclesReactProbability = value
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/fun", "Fun Enabled",
-            "Enable or Disable the fun features", self.settings.isFunEnabled, self.defaultSettings.isFunEnabled,
-            function(state)
-                self.settings.isFunEnabled = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addRangeFloat("/react_to_horn/fun", "Fun Radius",
-            "Adjust the radius within which vehicles and NPCs are having fun", self.minFunRadius,
-            self.maxFunRadius,
-            self.radiusStep, "%.2f", self.settings.funRadius, self.defaultSettings.funRadius,
-            function(value)
-                self.settings.funRadius = value
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/fun", "Pop Tires on Honk (might crash game)",
-            "As the name says. This might crash your game if you spam it!!!",
-            self.settings.popTiresOnHonk,
-            self.defaultSettings.popTiresOnHonk,
-            function(state)
-                self.settings.popTiresOnHonk = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/fun", "Vehicles Bounce on Honk",
-            "As the name says",
-            self.settings.bounceOnHonk,
-            self.defaultSettings.bounceOnHonk,
-            function(state)
-                self.settings.bounceOnHonk = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/fun", "NPCs Die on Honk",
-            "As the name says",
-            self.settings.killNPCsOnHonk,
-            self.defaultSettings.killNPCsOnHonk,
-            function(state)
-                self.settings.killNPCsOnHonk = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/fun", "NPCs Explode on Honk",
-            "As the name says",
-            self.settings.explodeNPCOnHonk,
-            self.defaultSettings.explodeNPCOnHonk,
-            function(state)
-                self.settings.explodeNPCOnHonk = state
-                SaveSettings()
-            end)
-
-        nativeSettings.addSwitch("/react_to_horn/fun", "Vehicles Explode on Honk",
-            "As the name says",
-            self.settings.explodeVehicleOnHonk,
-            self.defaultSettings.explodeVehicleOnHonk,
-            function(state)
-                self.settings.explodeVehicleOnHonk = state
-                SaveSettings()
-            end)
+registerInput("test", "Reaction Test", function(keypress)
+    if not keypress then
+        return
     end
-end
+
+    local player = Game.GetPlayer()
+    ReactToHorn:HandleHonkingReaction(player)
+    --[[ print("Verbal Probability: ", ReactToHorn.settings.complex.vehicle.verbalProbability)
+    print("Panic Probability: ", ReactToHorn.settings.complex.vehicle.panicProbability)
+    print("HonkBack Probability: ", ReactToHorn.settings.complex.vehicle.honkBackProbability) ]]
+end)
 
 return ReactToHorn:new()
