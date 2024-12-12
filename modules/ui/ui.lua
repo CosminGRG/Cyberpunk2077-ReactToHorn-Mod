@@ -30,6 +30,19 @@ function UI:InitializeDynamicElements()
                 end
             },
             {
+                type = "selector",
+                label = "Reaction Timeout",
+                description =
+                "After the pedestrian reacts to your horn it will wait this long before it can react again. (Seconds)",
+                options = self.reactToHorn.reactTimeoutNames,
+                current = self.reactToHorn.settings.pedestrianTimeoutSelectorValue,
+                default = self.reactToHorn.defaultSettings.pedestrianTimeoutSelectorValue,
+                callback = function(value)
+                    self.reactToHorn.settings.pedestrianTimeoutSelectorValue = value
+                    self:SaveSettings()
+                end
+            },
+            {
                 type = "slider",
                 label = "Reaction Probability (%)",
                 description = "The probability for the NPC reaction to happen",
@@ -47,44 +60,82 @@ function UI:InitializeDynamicElements()
         complex = {
             {
                 type = "slider",
-                label = "Complex Slider 1",
-                description = "First slider for complex mode",
-                min = 0,
-                max = 100,
+                label = "Min Reaction Timeout (s)",
+                description =
+                "The minimum value that the pedestrian might wait before the next verbal reaction. The timeout value is randomly generated between the minimum and maximum. Set both to 0 for no timeout",
+                min = self.reactToHorn.complexDefines.pedestrian.minPedestrianTimeoutMin,
+                max = self.reactToHorn.complexDefines.pedestrian.maxPedestrianTimeoutMin,
                 step = 1,
-                current = 1,
-                default = 30,
+                current = self.reactToHorn.settings.complex.pedestrian.pedestrianReactTimeoutMin,
+                default = self.reactToHorn.defaultSettings.complex.pedestrian.pedestrianReactTimeoutMin,
                 callback = function(value)
-                    print("Complex slider 3 value: ", value)
-                    -- Add any logic here for handling changes to this slider
+                    self.reactToHorn.settings.complex.pedestrian.pedestrianReactTimeoutMin = value
+                    self:HandlePedestrianMinMaxTimeout()
+                    self:SaveSettings()
                 end
             },
             {
                 type = "slider",
-                label = "Complex Slider 2",
-                description = "Second slider for complex mode",
-                min = 0,
-                max = 100,
+                label = "Max Reaction Timeout (s)",
+                description =
+                "The maximum value that the pedestrian might wait before the next verbal reaction. The timeout value is randomly generated between the minimum and maximum. Set both to 0 for no timeout",
+                min = self.reactToHorn.complexDefines.pedestrian.minPedestrianTimeoutMax,
+                max = self.reactToHorn.complexDefines.pedestrian.maxPedestrianTimeoutMax,
                 step = 1,
-                current = 1,
-                default = 60,
+                current = self.reactToHorn.settings.complex.pedestrian.pedestrianReactTimeoutMax,
+                default = self.reactToHorn.defaultSettings.complex.pedestrian.pedestrianReactTimeoutMax,
                 callback = function(value)
-                    print("Complex slider 3 value: ", value)
-                    -- Add any logic here for handling changes to this slider
+                    self.reactToHorn.settings.complex.pedestrian.pedestrianReactTimeoutMax = value
+                    self:HandlePedestrianMinMaxTimeout()
+                    self:SaveSettings()
                 end
             },
             {
                 type = "slider",
-                label = "Complex Slider 3",
-                description = "Third slider for complex mode",
+                label = "Walk Away Probability (%)",
+                description =
+                "The probability for the walk away reaction to happen. The total value of all 3 probabilities cannot exceed 100",
                 min = 0,
-                max = 100,
+                max = self.reactToHorn.complexDefines.pedestrian.maxWalkAwayProb,
                 step = 1,
-                current = 1,
-                default = 90,
+                current = self.reactToHorn.settings.complex.pedestrian.walkAwayProbability,
+                default = self.reactToHorn.defaultSettings.complex.pedestrian.walkAwayProbability,
                 callback = function(value)
-                    print("Complex slider 3 value: ", value)
-                    -- Add any logic here for handling changes to this slider
+                    self.reactToHorn.settings.complex.pedestrian.walkAwayProbability = value
+                    self:CalculatePedestrianReactProb("walkAway")
+                    self:SaveSettings()
+                end
+            },
+            {
+                type = "slider",
+                label = "Run Probability (%)",
+                description =
+                "The probability for the run reaction to happen. The total value of all 3 probabilities cannot exceed 100",
+                min = 0,
+                max = self.reactToHorn.complexDefines.pedestrian.maxRunProb,
+                step = 1,
+                current = self.reactToHorn.settings.complex.pedestrian.runProbability,
+                default = self.reactToHorn.defaultSettings.complex.pedestrian.runProbability,
+                callback = function(value)
+                    self.reactToHorn.settings.complex.pedestrian.runProbability = value
+                    self:CalculatePedestrianReactProb("run")
+                    self:SaveSettings()
+                end
+            },
+            {
+                type = "slider",
+                label = "Verbal Probability (%)",
+                description =
+                "The probability for the verbal reaction to happen. The total value of all 3 probabilities cannot exceed 100",
+                min = 0,
+                max = self.reactToHorn.complexDefines.pedestrian.maxVerbalProb,
+                step = 1,
+                current = self.reactToHorn.settings.complex.pedestrian.verbalProbability,
+                default = self.reactToHorn.defaultSettings.complex.pedestrian.verbalProbability,
+                callback = function(value)
+                    self.reactToHorn.settings.complex.pedestrian.verbalProbability = value
+                    self:CalculatePedestrianReactProb("verbal")
+                    self:SaveSettings()
                 end
             }
         }
@@ -108,7 +159,7 @@ function UI:InitializeDynamicElements()
                 label = "Reaction Timeout",
                 description =
                 "After the vehicle reacts to your horn it will wait this long before it can react again. (Seconds)",
-                options = self.reactToHorn.vehicleReactTimeoutNames,
+                options = self.reactToHorn.reactTimeoutNames,
                 current = self.reactToHorn.settings.vehicleTimoutSelectorValue,
                 default = self.reactToHorn.defaultSettings.vehicleTimoutSelectorValue,
                 callback = function(value)
@@ -144,7 +195,7 @@ function UI:InitializeDynamicElements()
                 default = self.reactToHorn.defaultSettings.complex.vehicle.vehicleReactTimeoutMin,
                 callback = function(value)
                     self.reactToHorn.settings.complex.vehicle.vehicleReactTimeoutMin = value
-                    self:HandleMinMaxTimeout()
+                    self:HandleVehicleMinMaxTimeout()
                     self:SaveSettings()
                 end
             },
@@ -160,14 +211,15 @@ function UI:InitializeDynamicElements()
                 default = self.reactToHorn.defaultSettings.complex.vehicle.vehicleReactTimeoutMax,
                 callback = function(value)
                     self.reactToHorn.settings.complex.vehicle.vehicleReactTimeoutMax = value
-                    self:HandleMinMaxTimeout()
+                    self:HandleVehicleMinMaxTimeout()
                     self:SaveSettings()
                 end
             },
             {
                 type = "slider",
                 label = "Honk Back Probability (%)",
-                description = "The probability for the honk back reaction to happen",
+                description =
+                "The probability for the honk back reaction to happen. The total value of all 3 probabilities cannot exceed 100",
                 min = 0,
                 max = self.reactToHorn.complexDefines.vehicle.maxHonkBackProb,
                 step = 1,
@@ -175,14 +227,15 @@ function UI:InitializeDynamicElements()
                 default = self.reactToHorn.defaultSettings.complex.vehicle.honkBackProbability,
                 callback = function(value)
                     self.reactToHorn.settings.complex.vehicle.honkBackProbability = value
-                    self:CalculateRemainingPercentage("honkBack")
+                    self:CalculateVehicleReactProb("honkBack")
                     self:SaveSettings()
                 end
             },
             {
                 type = "slider",
                 label = "Panic Probability (%)",
-                description = "The probability for the panic reaction to happen",
+                description =
+                "The probability for the panic reaction to happen. The total value of all 3 probabilities cannot exceed 100",
                 min = 0,
                 max = self.reactToHorn.complexDefines.vehicle.maxPanicProb,
                 step = 1,
@@ -190,14 +243,15 @@ function UI:InitializeDynamicElements()
                 default = self.reactToHorn.defaultSettings.complex.vehicle.panicProbability,
                 callback = function(value)
                     self.reactToHorn.settings.complex.vehicle.panicProbability = value
-                    self:CalculateRemainingPercentage("panic")
+                    self:CalculateVehicleReactProb("panic")
                     self:SaveSettings()
                 end
             },
             {
                 type = "slider",
                 label = "Verbal Probability (%)",
-                description = "The probability for the verbal reaction to happen",
+                description =
+                "The probability for the verbal reaction to happen. The total value of all 3 probabilities cannot exceed 100",
                 min = 0,
                 max = self.reactToHorn.complexDefines.vehicle.maxVerbalProb,
                 step = 1,
@@ -205,7 +259,7 @@ function UI:InitializeDynamicElements()
                 default = self.reactToHorn.defaultSettings.complex.vehicle.verbalProbability,
                 callback = function(value)
                     self.reactToHorn.settings.complex.vehicle.verbalProbability = value
-                    self:CalculateRemainingPercentage("verbal")
+                    self:CalculateVehicleReactProb("verbal")
                     self:SaveSettings()
                 end
             }
@@ -213,9 +267,37 @@ function UI:InitializeDynamicElements()
     }
 end
 
-function UI:HandleMinMaxTimeout()
+function UI:HandlePedestrianMinMaxTimeout()
     if self.isUpdatingTimeouts then
-        print("Already updating. Returning.")
+        return
+    end
+
+    local min = self.reactToHorn.settings.complex.pedestrian.pedestrianReactTimeoutMin
+    local max = self.reactToHorn.settings.complex.pedestrian.pedestrianReactTimeoutMax
+    if min > max then
+        if max == 0 then
+            min = 0
+        else
+            min = max - 1
+        end
+        self.reactToHorn.settings.complex.pedestrian.pedestrianReactTimeoutMin = min
+
+        self:InitializeDynamicElements()
+        self:SaveSettings()
+
+        self.isUpdatingTimeouts = true
+
+        local nativeSettings = GetMod("nativeSettings")
+        ---@diagnostic disable-next-line: missing-parameter
+        Cron.After(2, function()
+            self.isUpdatingTimeouts = false
+            self:updatePedestrianUIBasedOnPreset(nativeSettings)
+        end)
+    end
+end
+
+function UI:HandleVehicleMinMaxTimeout()
+    if self.isUpdatingTimeouts then
         return
     end
 
@@ -237,68 +319,51 @@ function UI:HandleMinMaxTimeout()
         local nativeSettings = GetMod("nativeSettings")
         ---@diagnostic disable-next-line: missing-parameter
         Cron.After(2, function()
-            print("Updated")
             self.isUpdatingTimeouts = false
             self:updateVehicleUIBasedOnPreset(nativeSettings)
         end)
     end
 end
 
-function UI:CalculateRemainingPercentage(changedType)
+function UI:CalculatePedestrianReactProb(changedType)
     local maxProb = 100
 
-    -- Get current probabilities
-    local verbalProb = self.reactToHorn.settings.complex.vehicle.verbalProbability
-    local panicProb = self.reactToHorn.settings.complex.vehicle.panicProbability
-    local honkBackProb = self.reactToHorn.settings.complex.vehicle.honkBackProbability
+    local verbalProb = self.reactToHorn.settings.complex.pedestrian.verbalProbability
+    local walkAwayProb = self.reactToHorn.settings.complex.pedestrian.walkAwayProbability
+    local runProb = self.reactToHorn.settings.complex.pedestrian.runProbability
 
-    -- Get the slider that has been modified
-    local modifiedProb = self.reactToHorn.settings.complex.vehicle[changedType .. "Probability"]
+    local modifiedProb = self.reactToHorn.settings.complex.pedestrian[changedType .. "Probability"]
 
-    -- Calculate the total probability after modification
-    local totalProb = verbalProb + panicProb + honkBackProb
+    local totalProb = verbalProb + walkAwayProb + runProb
 
-    print("Is Updating Probabilities.")
-    -- Only redistribute if the total exceeds 100%
     if totalProb > maxProb then
-        print("Total probabilities exceed 100")
-        -- Calculate the remaining percentage (maxProb - modified probability)
         local remainder = maxProb - modifiedProb
 
-        -- List other probabilities that need to be adjusted
         local probabilities = {
             verbal = verbalProb,
-            panic = panicProb,
-            honkBack = honkBackProb
+            walkAway = walkAwayProb,
+            run = runProb
         }
 
-        -- Remove the modified one from the adjustment list
         probabilities[changedType] = nil
 
-        -- Get the total of remaining (non-modified) probabilities
         local remainingProb = 0
         for _, prob in pairs(probabilities) do
             remainingProb = remainingProb + prob
         end
 
-        -- Adjust the remaining probabilities proportionally if remainingProb > 0
         if remainingProb > 0 then
             for key, prob in pairs(probabilities) do
                 local newProb = (prob / remainingProb) * remainder
-                -- Round the new probability
-                self.reactToHorn.settings.complex.vehicle[key .. "Probability"] = math.floor(newProb)
+                self.reactToHorn.settings.complex.pedestrian[key .. "Probability"] = math.floor(newProb)
             end
         end
     end
 
     self:InitializeDynamicElements()
-    print("Adjusted Verbal Probability: ", self.reactToHorn.settings.complex.vehicle.verbalProbability)
-    print("Adjusted Panic Probability: ", self.reactToHorn.settings.complex.vehicle.panicProbability)
-    print("Adjusted HonkBack Probability: ", self.reactToHorn.settings.complex.vehicle.honkBackProbability)
     self:SaveSettings()
 
     if self.isUpdatingProbs then
-        print("Already updating. Returning.")
         return
     end
 
@@ -307,9 +372,59 @@ function UI:CalculateRemainingPercentage(changedType)
     local nativeSettings = GetMod("nativeSettings")
     ---@diagnostic disable-next-line: missing-parameter
     Cron.After(2, function()
-        print("Updated")
         self.isUpdatingProbs = false
-        --nativeSettings.refresh()
+        self:updatePedestrianUIBasedOnPreset(nativeSettings)
+    end)
+end
+
+function UI:CalculateVehicleReactProb(changedType)
+    local maxProb = 100
+
+    local verbalProb = self.reactToHorn.settings.complex.vehicle.verbalProbability
+    local panicProb = self.reactToHorn.settings.complex.vehicle.panicProbability
+    local honkBackProb = self.reactToHorn.settings.complex.vehicle.honkBackProbability
+
+    local modifiedProb = self.reactToHorn.settings.complex.vehicle[changedType .. "Probability"]
+
+    local totalProb = verbalProb + panicProb + honkBackProb
+
+    if totalProb > maxProb then
+        local remainder = maxProb - modifiedProb
+
+        local probabilities = {
+            verbal = verbalProb,
+            panic = panicProb,
+            honkBack = honkBackProb
+        }
+
+        probabilities[changedType] = nil
+
+        local remainingProb = 0
+        for _, prob in pairs(probabilities) do
+            remainingProb = remainingProb + prob
+        end
+
+        if remainingProb > 0 then
+            for key, prob in pairs(probabilities) do
+                local newProb = (prob / remainingProb) * remainder
+                self.reactToHorn.settings.complex.vehicle[key .. "Probability"] = math.floor(newProb)
+            end
+        end
+    end
+
+    self:InitializeDynamicElements()
+    self:SaveSettings()
+
+    if self.isUpdatingProbs then
+        return
+    end
+
+    self.isUpdatingProbs = true
+
+    local nativeSettings = GetMod("nativeSettings")
+    ---@diagnostic disable-next-line: missing-parameter
+    Cron.After(2, function()
+        self.isUpdatingProbs = false
         self:updateVehicleUIBasedOnPreset(nativeSettings)
     end)
 end
@@ -360,10 +475,19 @@ function UI:SetupMenu(nativeSettings)
 
         nativeSettings.addSwitch("/react_to_horn/pedestrian_react_settings", "Pedestrians React To Horn",
             "When you're NOT on the pavement and honk your horn, pedestrians will react. You can choose the reaction type using the setting below",
-            self.reactToHorn.settings.pedestrianReactToHonk,
-            self.reactToHorn.defaultSettings.pedestrianReactToHonk,
+            self.reactToHorn.settings.pedestriansReactToHonk,
+            self.reactToHorn.defaultSettings.pedestriansReactToHonk,
             function(state)
-                self.reactToHorn.settings.pedestrianReactToHonk = state
+                self.reactToHorn.settings.pedestriansReactToHonk = state
+                self:SaveSettings()
+            end)
+
+        nativeSettings.addSwitch("/react_to_horn/pedestrian_react_settings", "Crowd Reaction",
+            "Chance for the whole crowd to react or for individual NPCs",
+            self.reactToHorn.settings.crowdReaction,
+            self.reactToHorn.defaultSettings.crowdReaction,
+            function(state)
+                self.reactToHorn.settings.crowdReaction = state
                 self:SaveSettings()
             end)
 
@@ -380,14 +504,12 @@ function UI:SetupMenu(nativeSettings)
 
         nativeSettings.addSelectorString("/react_to_horn/pedestrian_react_settings", "Config Mode",
             "Control over each type of reaction or simplified",
-            self.reactToHorn.pedestrianReactModeNames, self.reactToHorn.settings.pedestrianReactMode,
+            self.reactToHorn.reactConfigNames, self.reactToHorn.settings.pedestrianReactMode,
             self.reactToHorn.defaultSettings.pedestrianReactMode,
             function(value)
                 if value == 1 then
-                    print("preset simple")
                     self.reactToHorn.settings.currentPedestrianPreset = "simple"
                 else
-                    print("preset complex")
                     self.reactToHorn.settings.currentPedestrianPreset = "complex"
                 end
                 self.reactToHorn.settings.pedestrianReactMode = value
@@ -447,14 +569,12 @@ function UI:SetupMenu(nativeSettings)
 
         nativeSettings.addSelectorString("/react_to_horn/vehicle_react_settings", "Config Mode",
             "Control over each type of reaction or simplified",
-            self.reactToHorn.pedestrianReactModeNames, self.reactToHorn.settings.vehicleReactMode,
+            self.reactToHorn.reactConfigNames, self.reactToHorn.settings.vehicleReactMode,
             self.reactToHorn.defaultSettings.vehicleReactMode,
             function(value)
                 if value == 1 then
-                    print("vehicle preset simple")
                     self.reactToHorn.settings.currentvehiclePreset = "simple"
                 else
-                    print("vehicle preset complex")
                     self.reactToHorn.settings.currentvehiclePreset = "complex"
                 end
                 self.reactToHorn.settings.vehicleReactMode = value
@@ -549,20 +669,15 @@ function UI:SetupMenu(nativeSettings)
 end
 
 function UI:updatePedestrianUIBasedOnPreset(nativeSettings)
-    print("PLM")
-    -- Remove previous dynamically inserted UI elements
     for _, elementID in ipairs(self.currentPedestrianUIElements) do
         nativeSettings.removeOption(elementID)
     end
     self.currentPedestrianUIElements = {}
 
-    -- Get the elements for the current preset
     local selectedElements = self.pedestrianUIElements[self.reactToHorn.settings.currentPedestrianPreset]
 
-    -- Add elements dynamically
     for _, element in ipairs(selectedElements) do
         if element.type == "selector" then
-            -- Add selector with callback from pedestrianUIElements table
             local selectorID = nativeSettings.addSelectorString(
                 "/react_to_horn/pedestrian_react_settings",
                 element.label,
@@ -570,11 +685,10 @@ function UI:updatePedestrianUIBasedOnPreset(nativeSettings)
                 element.options,
                 element.current,
                 element.default,
-                element.callback -- Use the callback from the pedestrianUIElements table
+                element.callback
             )
             table.insert(self.currentPedestrianUIElements, selectorID)
         elseif element.type == "slider" then
-            -- Add slider with callback from pedestrianUIElements table
             local sliderID = nativeSettings.addRangeInt(
                 "/react_to_horn/pedestrian_react_settings",
                 element.label,
@@ -584,7 +698,7 @@ function UI:updatePedestrianUIBasedOnPreset(nativeSettings)
                 element.step,
                 element.current,
                 element.default,
-                element.callback -- Use the callback from the pedestrianUIElements table
+                element.callback
             )
             table.insert(self.currentPedestrianUIElements, sliderID)
         end
@@ -592,19 +706,15 @@ function UI:updatePedestrianUIBasedOnPreset(nativeSettings)
 end
 
 function UI:updateVehicleUIBasedOnPreset(nativeSettings)
-    -- Remove previous dynamically inserted UI elements
     for _, elementID in ipairs(self.currentVehicleUIElements) do
         nativeSettings.removeOption(elementID)
     end
     self.currentVehicleUIElements = {}
 
-    -- Get the elements for the current preset
     local selectedElements = self.vehicleUIElements[self.reactToHorn.settings.currentvehiclePreset]
 
-    -- Add elements dynamically
     for _, element in ipairs(selectedElements) do
         if element.type == "selector" then
-            -- Add selector with callback from pedestrianUIElements table
             local selectorID = nativeSettings.addSelectorString(
                 "/react_to_horn/vehicle_react_settings",
                 element.label,
@@ -612,11 +722,10 @@ function UI:updateVehicleUIBasedOnPreset(nativeSettings)
                 element.options,
                 element.current,
                 element.default,
-                element.callback -- Use the callback from the pedestrianUIElements table
+                element.callback
             )
             table.insert(self.currentVehicleUIElements, selectorID)
         elseif element.type == "slider" then
-            -- Add slider with callback from pedestrianUIElements table
             local sliderID = nativeSettings.addRangeInt(
                 "/react_to_horn/vehicle_react_settings",
                 element.label,
@@ -626,12 +735,11 @@ function UI:updateVehicleUIBasedOnPreset(nativeSettings)
                 element.step,
                 element.current,
                 element.default,
-                element.callback -- Use the callback from the pedestrianUIElements table
+                element.callback
             )
             table.insert(self.currentVehicleUIElements, sliderID)
         end
     end
-    print("Update function ran")
 end
 
 function UI:SaveSettings()
